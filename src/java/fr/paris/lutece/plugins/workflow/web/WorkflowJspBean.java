@@ -48,6 +48,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -280,6 +281,7 @@ public class WorkflowJspBean extends PluginAdminPageJspBean
     private static final String MESSAGE_TASK_IS_NOT_AUTOMATIC = "workflow.message.task_not_automatic";
     private static final String MESSAGE_MASS_ACTION_CANNOT_BE_AUTOMATIC = "workflow.message.mass_action_cannot_be_automatic";
     private static final String MESSAGE_REFLEXIVE_ACTION_NAME = "workflow.reflexive_action.defaultTitle";
+    private static final String MESSAGE_AUTOMATIC_ACTION_LOOP = "workflow.message.automatic_action_loop";
     private static final String PANE_STATES = "pane-states";
     private static final String PANE_ACTIONS = "pane-actions";
     private static final String PANE_DEFAULT = PANE_STATES;
@@ -1376,6 +1378,98 @@ public class WorkflowJspBean extends PluginAdminPageJspBean
 
         action.setListIdsLinkedAction( getSelectedLinkedActions( action, request ) );
 
+        if( action.isAutomaticState() )
+        {
+            List<Action> stackActionLoop = findAutomaticActionLoop( action );
+            if ( stackActionLoop!=null ) {
+
+                List<String> listActionName = stackActionLoop.stream().map(Action::getName).collect(Collectors.toList());
+                Object [ ] arguments = {
+                    StringUtils.join( listActionName, " -> " )
+                };
+                return AdminMessageService.getMessageUrl( request, MESSAGE_AUTOMATIC_ACTION_LOOP, arguments, AdminMessage.TYPE_STOP );
+
+            }
+        }
+
+        return null;
+    }
+
+    private List<Action> findAutomaticActionLoop( Action newAction )
+    {
+
+        ActionFilter filter = new ActionFilter( );
+        filter.setIsAutomaticState( 1 );
+        filter.setAutomaticReflexiveAction( false );
+        filter.setIdWorkflow( newAction.getWorkflow().getId() );
+
+        List<Action> listAction = _actionService.getListActionByFilter( filter );
+
+        Map<Integer, List<Action>> mapIdBeforeAction = new HashMap<>();
+        for( Action action : listAction )
+        {
+            if ( action.getId() != newAction.getId() )
+            {
+                addBuildStateMapFormAction( mapIdBeforeAction, action);
+            }
+        }
+        addBuildStateMapFormAction( mapIdBeforeAction, newAction);
+
+        return findLoop( newAction.getStateAfter().getId(), mapIdBeforeAction, newAction.getStateAfter().getId() );
+
+    }
+
+
+    private void addBuildStateMapFormAction( Map<Integer, List<Action>> mapIdAfterAction, Action action )
+    {
+        List<Action> listAction = mapIdAfterAction.get( action.getStateAfter().getId() );
+        if( listAction == null )
+        {
+            listAction = new ArrayList<>();
+            listAction.add( action);
+            mapIdAfterAction.put( action.getStateAfter().getId(), listAction );
+        }
+        else
+        {
+            listAction.add( action );
+        }
+
+    }
+
+    private List<Action> findLoop( Integer idStateTofind, Map<Integer, List<Action>> mapIdAfterAction, Integer currentIdState )
+    {
+        List<Action> listAction = mapIdAfterAction.get( currentIdState );
+
+        if( listAction == null)
+        {
+            return null;
+        }
+
+        for (Action action : listAction)
+        {
+            if( action.getListIdStateBefore().contains(idStateTofind) )
+            {
+                List<Action> listLoopAction = new ArrayList<>();
+                listLoopAction.add( action );
+                return listLoopAction;
+            }
+        }
+
+        for ( Action action : listAction )
+        {
+            Map<Integer, List<Action>> mapIdAfterActionClone = new HashMap<>(mapIdAfterAction);
+            mapIdAfterActionClone.remove( currentIdState );
+
+            for ( Integer idState : action.getListIdStateBefore() )
+            {
+                List<Action> listLoopAction = findLoop( idStateTofind , mapIdAfterActionClone , idState );
+                if( listLoopAction !=null )
+                {
+                    listLoopAction.add(action);
+                    return listLoopAction;
+                }
+            }
+        }
         return null;
     }
 
